@@ -306,6 +306,13 @@ textarea.text-input { min-height: 160px; resize: vertical; font-size: 12px; line
 .error-box { background: var(--red-light); border: 1px solid rgba(160,41,31,0.2); border-radius: var(--radius-sm); padding: 0.75rem 1rem; margin-top: 0.75rem; font-size: 12px; color: var(--red-text); display: none; }
 .error-box.show { display: block; }
 .social-note { font-size: 12px; color: var(--text-light); background: var(--cream); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.75rem 1rem; line-height: 1.55; margin-bottom: 1rem; }
+.drop-zone { border: 2px dashed var(--border-mid); border-radius: var(--radius-sm); padding: 1.5rem 1rem; text-align: center; cursor: pointer; transition: all 0.2s; background: var(--cream); margin-bottom: 0.75rem; }
+.drop-zone:hover { border-color: var(--teal-text); background: var(--teal-light); }
+.drop-zone.dragover { border-color: var(--teal-text); background: var(--teal-light); transform: scale(1.01); }
+.drop-zone-label { font-size: 13px; color: var(--text-mid); font-family: 'DM Sans', sans-serif; pointer-events: none; }
+.drop-zone-label strong { color: var(--teal-text); }
+.drop-zone-file { font-size: 12px; color: var(--text-light); margin-top: 6px; pointer-events: none; }
+.drop-zone input[type="file"] { display: none; }
 .admin-tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; }
 .admin-tab { font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 9px 14px; border: none; background: transparent; color: var(--text-light); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; white-space: nowrap; }
 .admin-tab:hover { color: var(--text-dark); }
@@ -519,9 +526,10 @@ textarea.text-input { min-height: 160px; resize: vertical; font-size: 12px; line
             <label class="field-label">Source URL or label (optional)</label>
             <input type="text" class="text-input" id="aichat-url" placeholder="e.g. ChatGPT, Perplexity, or a URL..." />
           </div>
-          <div class="field-row">
-            <label class="field-label">Upload an HTML file (optional)</label>
-            <input type="file" accept=".html,.htm,.txt" id="aichat-file" class="text-input" onchange="loadAIChatFile()" style="padding:8px;" />
+          <div class="drop-zone" id="aichat-drop" onclick="document.getElementById('aichat-file').click()">
+            <input type="file" accept=".html,.htm,.txt" id="aichat-file" onchange="loadAIChatFile()" />
+            <div class="drop-zone-label">Drag &amp; drop an <strong>.html</strong> or <strong>.txt</strong> file here, or <strong>click to browse</strong></div>
+            <div class="drop-zone-file" id="aichat-drop-name"></div>
           </div>
           <div class="field-row">
             <label class="field-label">Or paste chat output, text, or HTML</label>
@@ -550,9 +558,10 @@ textarea.text-input { min-height: 160px; resize: vertical; font-size: 12px; line
             For <em>ingredients</em>, use <code>amount: name</code> separated by <code>|</code> (e.g. <code>2 cups: flour | 1 tsp: salt</code>).<br>
             For <em>steps</em> and <em>tips</em>, separate with <code>|</code>.
           </div>
-          <div class="field-row">
-            <label class="field-label">Upload CSV file</label>
-            <input type="file" accept=".csv,.txt" id="csv-file" class="text-input" onchange="loadCSVFile()" style="padding:8px;" />
+          <div class="drop-zone" id="csv-drop" onclick="document.getElementById('csv-file').click()">
+            <input type="file" accept=".csv,.txt" id="csv-file" onchange="loadCSVFile()" />
+            <div class="drop-zone-label">Drag &amp; drop a <strong>.csv</strong> or <strong>.txt</strong> file here, or <strong>click to browse</strong></div>
+            <div class="drop-zone-file" id="csv-drop-name"></div>
           </div>
           <div class="field-row">
             <label class="field-label">Or paste CSV text</label>
@@ -1264,6 +1273,23 @@ function clearSocial(){
   pendingMap['social']=null;
 }
 
+/* ── Drag & drop ── */
+function setupDropZone(zoneId, fileInputId, nameDisplayId, onFileLoad){
+  const zone=document.getElementById(zoneId);
+  if(!zone)return;
+  zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('dragover');});
+  zone.addEventListener('dragleave',e=>{e.preventDefault();zone.classList.remove('dragover');});
+  zone.addEventListener('drop',e=>{
+    e.preventDefault();zone.classList.remove('dragover');
+    const file=e.dataTransfer.files[0];
+    if(!file)return;
+    document.getElementById(nameDisplayId).textContent=file.name;
+    const reader=new FileReader();
+    reader.onload=ev=>onFileLoad(ev.target.result);
+    reader.readAsText(file);
+  });
+}
+
 /* ── AI Chat / HTML ── */
 function stripHtmlToText(html){
   // Remove script/style blocks entirely, then strip tags, collapse whitespace
@@ -1278,6 +1304,7 @@ function looksLikeHtml(s){
 function loadAIChatFile(){
   const fileInput=document.getElementById('aichat-file');
   if(!fileInput.files.length)return;
+  document.getElementById('aichat-drop-name').textContent=fileInput.files[0].name;
   const reader=new FileReader();
   reader.onload=e=>{document.getElementById('aichat-text').value=e.target.result;};
   reader.readAsText(fileInput.files[0]);
@@ -1297,6 +1324,7 @@ function clearAIChat(){
   document.getElementById('aichat-text').value='';
   document.getElementById('aichat-url').value='';
   document.getElementById('aichat-file').value='';
+  document.getElementById('aichat-drop-name').textContent='';
   document.getElementById('aichat-error').className='error-box';
   pendingMap['aichat']=null;
 }
@@ -1305,6 +1333,7 @@ function clearAIChat(){
 function loadCSVFile(){
   const fileInput=document.getElementById('csv-file');
   if(!fileInput.files.length)return;
+  document.getElementById('csv-drop-name').textContent=fileInput.files[0].name;
   const reader=new FileReader();
   reader.onload=e=>{document.getElementById('csv-text').value=e.target.result;};
   reader.readAsText(fileInput.files[0]);
@@ -1407,6 +1436,7 @@ function clearCSV(){
   document.getElementById('csv-preview').className='preview-wrap';
   document.getElementById('csv-text').value='';
   document.getElementById('csv-file').value='';
+  document.getElementById('csv-drop-name').textContent='';
   document.getElementById('csv-error').className='error-box';
   pendingMap['csv']=null;
 }
@@ -1521,6 +1551,14 @@ function applyTheme(t){
 
   applyTheme(localStorage.getItem('ck_theme')||'light');
   renderGrid();
+
+  // Wire up drag & drop zones
+  setupDropZone('aichat-drop','aichat-file','aichat-drop-name',text=>{
+    document.getElementById('aichat-text').value=text;
+  });
+  setupDropZone('csv-drop','csv-file','csv-drop-name',text=>{
+    document.getElementById('csv-text').value=text;
+  });
 })();
 </script>
 </body>
