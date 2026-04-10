@@ -343,8 +343,13 @@ textarea.text-input { min-height: 160px; resize: vertical; font-size: 12px; line
 <div class="login-overlay" id="login-overlay" style="display:none;">
   <div class="login-card">
     <h2>Karrie's Kitchen</h2>
-    <p>Enter your PIN to sync</p>
-    <input type="password" id="login-pin" maxlength="6" placeholder="····" inputmode="numeric" autocomplete="off" />
+    <p>Sign in to sync across devices</p>
+    <select id="login-name" class="text-input" style="width:100%;box-sizing:border-box;text-align:center;font-size:15px;padding:10px;margin-bottom:0.75rem;">
+      <option value="">Choose your name...</option>
+      <option value="eric">Eric</option>
+      <option value="karrie">Karrie</option>
+    </select>
+    <input type="password" id="login-pin" maxlength="6" placeholder="PIN" inputmode="numeric" autocomplete="off" />
     <button class="btn btn-primary" onclick="submitLogin()">Sign in</button>
     <button class="btn" onclick="skipLogin()" style="margin-top:0.5rem;width:100%;font-size:12px;">Use offline (no sync)</button>
     <div class="login-error" id="login-error"></div>
@@ -720,22 +725,32 @@ function saveUrls(){ localStorage.setItem('ck_urls', JSON.stringify(customUrls))
    SYNC ENGINE
 ══════════════════════════════════════════ */
 let syncUserId = sessionStorage.getItem('ck_sync_user') || null;
+let syncToken = sessionStorage.getItem('ck_sync_token') || null;
 let lastSyncTime = localStorage.getItem('ck_last_sync') || null;
 let _syncTimeout = null;
 let _pendingKeys = new Set();
+let _failedKeys = new Set(); // retry queue for offline pushes
 let _syncEnabled = false;
+let _syncIntervalId = null;
+let _syncPulling = false; // prevent overlapping pulls
+
+function syncHeaders() {
+  return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + syncToken };
+}
 
 function syncPush(keys) {
   if (!_syncEnabled || !syncUserId) return;
   keys.forEach(k => _pendingKeys.add(k));
   clearTimeout(_syncTimeout);
   _syncTimeout = setTimeout(async () => {
-    const items = [..._pendingKeys].map(k => ({ key: k, value: localStorage.getItem(k) }));
+    const keysToSend = new Set([..._pendingKeys, ..._failedKeys]);
+    const items = [...keysToSend].map(k => ({ key: k, value: localStorage.getItem(k) }));
     _pendingKeys.clear();
+    _failedKeys.clear();
     try {
       const res = await fetch(`/api/sync/${syncUserId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: syncHeaders(),
         body: JSON.stringify({ items })
       });
       if (res.ok) {
@@ -743,28 +758,40 @@ function syncPush(keys) {
         lastSyncTime = data.updated_at;
         localStorage.setItem('ck_last_sync', lastSyncTime);
         setSyncStatus('online');
+      } else if (res.status === 401) {
+        // Token expired — force re-login
+        handleAuthFailure();
+      } else {
+        // Server error — re-queue for retry
+        items.forEach(i => _failedKeys.add(i.key));
+        setSyncStatus('offline');
       }
     } catch (e) {
       console.warn('Sync push failed:', e);
+      items.forEach(i => _failedKeys.add(i.key));
       setSyncStatus('offline');
     }
   }, 500);
 }
 
 async function syncPull() {
-  if (!_syncEnabled || !syncUserId) return;
+  if (!_syncEnabled || !syncUserId || _syncPulling) return;
+  _syncPulling = true;
   try {
     const url = lastSyncTime
       ? `/api/sync/${syncUserId}?since=${encodeURIComponent(lastSyncTime)}`
       : `/api/sync/${syncUserId}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: syncHeaders() });
+    if (res.status === 401) { handleAuthFailure(); return; }
     if (!res.ok) return;
     const { data } = await res.json();
     if (!data || !data.length) { setSyncStatus('online'); return; }
 
+    const VALID_KEYS = new Set(['ck_imported','ck_tracking','ck_urls','ck_api_key','ck_units','ck_theme']);
     let needReload = false;
     let maxTime = lastSyncTime;
     for (const row of data) {
+      if (!VALID_KEYS.has(row.key)) continue; // ignore unknown keys
       const current = localStorage.getItem(row.key);
       if (current !== row.value) {
         localStorage.setItem(row.key, row.value);
@@ -776,9 +803,14 @@ async function syncPull() {
     localStorage.setItem('ck_last_sync', lastSyncTime);
     if (needReload) reloadFromLocalStorage();
     setSyncStatus('online');
+
+    // Retry any failed pushes now that we're online
+    if (_failedKeys.size > 0) syncPush([]);
   } catch (e) {
     console.warn('Sync pull failed:', e);
     setSyncStatus('offline');
+  } finally {
+    _syncPulling = false;
   }
 }
 
@@ -798,7 +830,7 @@ function reloadFromLocalStorage() {
   });
   const k = localStorage.getItem('ck_api_key');
   if (k) { showKeySaved(k); collapseKeyCard(); }
-  renderGrid();
+  if (!activeModalId) renderGrid(); // don't disrupt open modals
 }
 
 async function syncPushAll() {
@@ -808,7 +840,7 @@ async function syncPushAll() {
   try {
     const res = await fetch(`/api/sync/${syncUserId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: syncHeaders(),
       body: JSON.stringify({ items })
     });
     if (res.ok) {
@@ -831,21 +863,43 @@ function setSyncStatus(state) {
   }
 }
 
+function handleAuthFailure() {
+  _syncEnabled = false;
+  syncUserId = null;
+  syncToken = null;
+  sessionStorage.removeItem('ck_sync_user');
+  sessionStorage.removeItem('ck_sync_token');
+  if (_syncIntervalId) { clearInterval(_syncIntervalId); _syncIntervalId = null; }
+  setSyncStatus('offline');
+  document.getElementById('login-error').textContent = 'Session expired. Please sign in again.';
+  document.getElementById('login-pin').value = '';
+  document.getElementById('login-overlay').style.display = 'flex';
+}
+
 async function submitLogin() {
+  const nameEl = document.getElementById('login-name');
   const pin = document.getElementById('login-pin').value.trim();
   const errEl = document.getElementById('login-error');
+  const userId = nameEl ? nameEl.value.trim().toLowerCase() : '';
   errEl.textContent = '';
+  if (!userId) { errEl.textContent = 'Choose your name'; return; }
   if (!pin) { errEl.textContent = 'Enter your PIN'; return; }
   try {
     const res = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin })
+      body: JSON.stringify({ user_id: userId, pin })
     });
-    if (!res.ok) { errEl.textContent = 'Invalid PIN. Try again.'; return; }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      errEl.textContent = err.error || 'Invalid PIN. Try again.';
+      return;
+    }
     const data = await res.json();
     syncUserId = data.user_id;
+    syncToken = data.token;
     sessionStorage.setItem('ck_sync_user', syncUserId);
+    sessionStorage.setItem('ck_sync_token', syncToken);
     _syncEnabled = true;
     document.getElementById('login-overlay').style.display = 'none';
     await startSync();
@@ -857,19 +911,22 @@ async function submitLogin() {
 function skipLogin() {
   _syncEnabled = false;
   syncUserId = null;
+  syncToken = null;
   document.getElementById('login-overlay').style.display = 'none';
   setSyncStatus('offline');
 }
 
 async function startSync() {
-  // First pull from server, then push any local changes
+  if (_syncIntervalId) return; // prevent duplicate intervals
   await syncPull();
   await syncPushAll();
-  // Poll every 30 seconds
-  setInterval(syncPull, 30000);
-  // Pull on tab focus
+  _syncIntervalId = setInterval(syncPull, 30000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') syncPull();
+    if (document.visibilityState === 'visible') {
+      syncPull();
+      // Also retry failed pushes on tab focus
+      if (_failedKeys.size > 0) syncPush([]);
+    }
   });
 }
 
@@ -1692,7 +1749,7 @@ function applyTheme(t){
    INIT
 ══════════════════════════════════════════ */
 (async function init(){
-  // Migrate recipes imported under the old dd_ key
+  // Migrate recipes imported under the old dd_ key (write to localStorage only — no syncPush)
   const old=localStorage.getItem('dd_imported');
   if(old){
     try{
@@ -1700,17 +1757,17 @@ function applyTheme(t){
       if(oldRecs&&oldRecs.length){
         const existIds=new Set(imported.map(r=>r.id));
         oldRecs.forEach(r=>{ if(!existIds.has(r.id)){ if(!r.ytUrl)r.ytUrl=''; imported.push(r); } });
-        saveImported();
+        localStorage.setItem('ck_imported', JSON.stringify(imported));
       }
     }catch(e){}
   }
-  // Migrate tracking under dd_ key
+  // Migrate tracking under dd_ key (write to localStorage only — no syncPush)
   const oldT=localStorage.getItem('dd_tracking');
   if(oldT){
     try{
       const ot=JSON.parse(oldT);
       Object.keys(ot).forEach(k=>{ if(!tracking[k]) tracking[k]=ot[k]; });
-      saveTracking();
+      localStorage.setItem('ck_tracking', JSON.stringify(tracking));
     }catch(e){}
   }
   // Recalculate nextId after migration
@@ -1746,15 +1803,17 @@ function applyTheme(t){
   });
 
   // Sync: check for existing session or show login
-  if(syncUserId){
+  if(syncUserId && syncToken){
     _syncEnabled=true;
     startSync();
   }else{
-    // Check if server has sync available
+    // Check if server has sync available via health endpoint
     try{
-      const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:''})});
-      // Server responded — show login gate
-      document.getElementById('login-overlay').style.display='flex';
+      const res=await fetch('/api/health');
+      if(res.ok){
+        const data=await res.json();
+        if(data.db) document.getElementById('login-overlay').style.display='flex';
+      }
     }catch(e){
       // No server / running locally — skip sync silently
       setSyncStatus('');
