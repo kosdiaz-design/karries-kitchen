@@ -124,6 +124,28 @@ body { font-family: 'DM Sans', sans-serif; background: var(--cream); color: var(
   .cat-section .grid { grid-template-columns: 1fr; }
 }
 
+/* ── Completeness badges ── */
+.completeness-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 999px; margin-bottom: 7px; margin-left: 6px;
+  cursor: help;
+}
+.badge-incomplete {
+  background: #fef3c7; color: #92400e; border: 1px solid #fcd34d;
+}
+[data-theme="dark"] .badge-incomplete {
+  background: #78350f; color: #fde68a; border-color: #b45309;
+}
+.badge-missing {
+  background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5;
+}
+[data-theme="dark"] .badge-missing {
+  background: #7f1d1d; color: #fecaca; border-color: #b91c1c;
+}
+.card.card-incomplete { border-left: 3px solid #f59e0b; }
+.card.card-missing { border-left: 3px solid #ef4444; }
+
 /* ── Tag colors ── */
 .tag { display: inline-block; font-size: 10px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 9px; border-radius: 999px; margin-bottom: 7px; }
 .tag-protein   { background: var(--green-light);  color: var(--green-text); }
@@ -444,6 +466,7 @@ textarea.text-input { min-height: 160px; resize: vertical; font-size: 12px; line
       <button class="filter-btn" data-filter="salad">Salad</button>
       <button class="filter-btn" data-filter="sides">Sides &amp; Sauces</button>
       <button class="filter-btn" data-filter="other">Other</button>
+      <button class="filter-btn filter-btn-incomplete" data-filter="incomplete" style="border-color:#f59e0b;color:#92400e;">⚠ Incomplete</button>
     </div>
     <div class="filter-sub-row" id="filter-sub-row" style="display:none;"></div>
   </div>
@@ -738,7 +761,29 @@ const CAT_LABEL = {healthy:'Healthy',breakfast:'Breakfast',dinner:'Dinner',desse
 const CAT_MIGRATION = {protein:'healthy',mousse:'healthy',chia:'healthy',bread:'other',drink:'other',lunch:'dinner'};
 const SUB_CATS = {dinner:['chicken','beef','pork','seafood','pasta','other']};
 const SUB_LABELS = {chicken:'Chicken',beef:'Beef',pork:'Pork',seafood:'Seafood',pasta:'Pasta',other:'Other'};
- 
+
+/* ── Completeness scoring ── */
+function recipeCompleteness(r){
+  const ings = r.ingredients || [];
+  const steps = r.steps || [];
+  const hasIngs = ings.length > 0;
+  const hasSteps = steps.length > 0;
+  if(!hasIngs && !hasSteps) return {level:'missing', label:'Missing data', detail:'No ingredients or steps'};
+  if(!hasIngs) return {level:'missing', label:'Missing data', detail:'No ingredients'};
+  if(!hasSteps && ings.length > 0){
+    const withAmt = ings.filter(i=>i.a && i.a.trim() && i.a.trim().toLowerCase()!=='to taste').length;
+    const pct = Math.round(withAmt/ings.length*100);
+    if(pct < 50) return {level:'missing', label:'Missing data', detail:'No steps + '+pct+'% ingredients have quantities'};
+    return {level:'incomplete', label:'Incomplete', detail:'No steps'};
+  }
+  const withAmt = ings.filter(i=>i.a && i.a.trim() && i.a.trim().toLowerCase()!=='to taste').length;
+  if(withAmt === 0 && ings.length > 0) return {level:'incomplete', label:'Incomplete', detail:'No quantities on '+ings.length+' ingredients'};
+  const pct = Math.round(withAmt/ings.length*100);
+  if(pct < 50) return {level:'incomplete', label:'Incomplete', detail: pct+'% of ingredients have quantities'};
+  if(pct < 90) return {level:'partial', label:'', detail: pct+'% complete'};
+  return {level:'complete', label:'', detail:''};
+}
+
 /* ══════════════════════════════════════════
    RECIPE DATA
 ══════════════════════════════════════════ */
@@ -1113,6 +1158,7 @@ function matchesSearch(r,q){
   if(r.title.toLowerCase().includes(lq))return true;
   if((CAT_LABEL[r.category]||r.category||'').toLowerCase().includes(lq))return true;
   if((r.ingredients||[]).some(i=>i.n.toLowerCase().includes(lq)))return true;
+  if(lq==='incomplete'||lq==='missing'){const c=recipeCompleteness(r);if(c.level==='incomplete'||c.level==='missing')return true;}
   return false;
 }
 /* ── Card HTML helper ── */
@@ -1121,9 +1167,13 @@ function cardHtml(r){
   const n=t.log?t.log.length:0;
   const last=lastMadeStr(t.log);
   const trackInfo=n>0?`<div style="margin-top:2px;font-size:11px;color:var(--text-light);">Made ${n}× · Last: ${last}</div>`:'';
-  return`<div class="card" onclick="openModal(${r.id})">
+  const comp=recipeCompleteness(r);
+  const badgeCls=comp.level==='missing'?'badge-missing':comp.level==='incomplete'?'badge-incomplete':'';
+  const badgeHtml=badgeCls?`<span class="completeness-badge ${badgeCls}" title="${comp.detail}">⚠ ${comp.label}</span>`:'';
+  const cardCls=comp.level==='missing'?'card card-missing':comp.level==='incomplete'?'card card-incomplete':'card';
+  return`<div class="${cardCls}" onclick="openModal(${r.id})">
     <div class="card-top">
-      ${tagHtml(r.category||'other')}
+      <div style="display:flex;align-items:center;flex-wrap:wrap;">${tagHtml(r.category||'other')}${badgeHtml}</div>
       <div class="card-title">${cap(r.title)}</div>
       <div class="card-meta">
         <span>${r.yield||''}</span>
@@ -1144,7 +1194,20 @@ function renderGrouped(){
   const container=document.getElementById('grid-grouped');
   const catOrder=ALL_CATS.filter(c=>all.some(r=>r.category===c))
     .sort((a,b)=>all.filter(r=>r.category===b).length - all.filter(r=>r.category===a).length);
-  container.innerHTML=catOrder.map(cat=>{
+  /* Incomplete section at top */
+  const incompleteRecipes=all.filter(r=>{const c=recipeCompleteness(r);return c.level==='missing'||c.level==='incomplete';});
+  let incSection='';
+  if(incompleteRecipes.length>0){
+    const preview=incompleteRecipes.slice(0,4);
+    incSection=`<div class="cat-section">
+      <div class="cat-section-header" style="border-bottom-color:#f59e0b;">
+        <div><span class="cat-section-title" style="color:#92400e;">⚠ Needs Attention</span><span class="cat-section-count">${incompleteRecipes.length}</span></div>
+        ${incompleteRecipes.length>4?`<button class="cat-section-link" onclick="setFilter('incomplete')">See all ${incompleteRecipes.length} →</button>`:''}
+      </div>
+      <div class="grid">${preview.map(r=>cardHtml(r)).join('')}</div>
+    </div>`;
+  }
+  container.innerHTML=incSection+catOrder.map(cat=>{
     const recipes=all.filter(r=>r.category===cat);
     const preview=recipes.slice(0,4);
     const label=CAT_LABEL[cat]||cap(cat);
@@ -1165,7 +1228,12 @@ const PAGE_SIZE=24;
 
 function renderFlat(){
   const all=allRecipes();
-  let list=currentFilter==='all'?all:all.filter(r=>r.category===currentFilter);
+  let list;
+  if(currentFilter==='incomplete'){
+    list=all.filter(r=>{const c=recipeCompleteness(r);return c.level==='missing'||c.level==='incomplete';});
+  } else {
+    list=currentFilter==='all'?all:all.filter(r=>r.category===currentFilter);
+  }
   if(currentSubFilter)list=list.filter(r=>(r.subcategory||'').toLowerCase()===currentSubFilter || (!r.subcategory && currentSubFilter==='other'));
   if(searchQuery)list=list.filter(r=>matchesSearch(r,searchQuery));
   const totalPages=Math.ceil(list.length/PAGE_SIZE);
@@ -1216,6 +1284,14 @@ function renderGrid(){
     renderFlat();
   }
   updateSubFilters();
+  /* Style the incomplete filter button dynamically */
+  const incBtn=document.querySelector('.filter-btn[data-filter="incomplete"]');
+  if(incBtn){
+    const all=allRecipes();
+    const cnt=all.filter(r=>{const c=recipeCompleteness(r);return c.level==='missing'||c.level==='incomplete';}).length;
+    incBtn.textContent='⚠ Incomplete ('+cnt+')';
+    incBtn.style.display=cnt>0?'':'none';
+  }
 }
 
 /* ── Sub-category filters for Dinner ── */
@@ -1332,8 +1408,13 @@ function openModal(id){
     <span class="cat-saved" id="url-saved-${id}">✓ Saved</span>
   </div>`;
  
+  const comp=recipeCompleteness(r);
+  const compBanner=(comp.level==='missing'||comp.level==='incomplete')
+    ?`<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:10px 14px;margin-bottom:1rem;font-size:13px;color:#92400e;">
+        <strong>⚠ ${comp.label}:</strong> ${comp.detail}. This recipe needs editing — open the source file or use the edit fields below to complete it.
+      </div>`:'';
   document.getElementById('m-body').innerHTML=`
-    ${topHtml}
+    ${compBanner}${topHtml}
     <div class="modal-2col">${ingSection}${stepsHtml}</div>
     ${tipsHtml}
     ${catEdit}${urlEdit}
