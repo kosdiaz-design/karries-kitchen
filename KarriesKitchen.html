@@ -281,6 +281,14 @@ body { font-family: 'DM Sans', sans-serif; background: var(--cream); color: var(
 .track-stats { display: flex; gap: 14px; }
 .track-stat .ts-val { font-size: 15px; font-weight: 500; color: var(--text-dark); }
 .track-stat .ts-lbl { font-size: 10px; color: var(--text-light); margin-top: 1px; }
+.eric-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--amber-light); color: var(--amber-text); margin-bottom: 7px; margin-left: 5px; line-height: 1.4; }
+.eric-badge .eb-emoji { font-size: 12px; }
+.recipe-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 0.75rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+.eric-toggle-btn { font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-mid); background: var(--warm-white); color: var(--text-mid); cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 5px; }
+.eric-toggle-btn:hover { border-color: var(--amber-text); color: var(--amber-text); }
+.eric-toggle-btn.on { background: var(--amber-light); border-color: var(--amber-text); color: var(--amber-text); }
+.delete-btn { font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--red-text); background: var(--warm-white); color: var(--red-text); cursor: pointer; transition: all 0.15s; margin-left: auto; }
+.delete-btn:hover { background: var(--red-text); color: var(--warm-white); }
 .mark-made-btn { font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500; padding: 7px 14px; border-radius: var(--radius-sm); border: 1px solid var(--green-text); background: var(--green-light); color: var(--green-text); cursor: pointer; transition: all 0.18s; white-space: nowrap; }
 .mark-made-btn:hover { background: var(--green-text); color: var(--warm-white); }
 .mark-made-btn.flash { background: var(--green-text); color: var(--warm-white); transform: scale(0.97); }
@@ -759,8 +767,28 @@ textarea.text-input { min-height: 160px; resize: vertical; font-size: 12px; line
 const ALL_CATS = ['healthy','breakfast','dinner','dessert','snack','soup','salad','sides','other'];
 const CAT_LABEL = {healthy:'Healthy',breakfast:'Breakfast',dinner:'Dinner',dessert:'Dessert',snack:'Snacks & Apps',soup:'Soup',salad:'Salad',sides:'Sides & Sauces',other:'Other'};
 const CAT_MIGRATION = {protein:'healthy',mousse:'healthy',chia:'healthy',bread:'other',drink:'other',lunch:'dinner'};
-const SUB_CATS = {dinner:['chicken','beef','pork','seafood','pasta','other']};
-const SUB_LABELS = {chicken:'Chicken',beef:'Beef',pork:'Pork',seafood:'Seafood',pasta:'Pasta',other:'Other'};
+const SUB_CATS = {
+  dinner:['chicken','beef','pork','seafood','pasta','vegetarian','other'],
+  lunch:['chicken','beef','seafood','sandwich','wrap','bowl','vegetarian','other'],
+  breakfast:['eggs','oats','pancakes','smoothie','pastry','other'],
+  dessert:['chocolate','fruit','cake','cookie','frozen','other'],
+  snack:['sweet','savory','other'],
+  soup:['chicken','beef','seafood','vegetable','other'],
+  salad:['chicken','beef','seafood','grain','vegetable','other'],
+  bread:['sweet','savory','other'],
+  drink:['smoothie','coffee','tea','juice','other'],
+  sides:['vegetable','grain','potato','other']
+};
+const SUB_LABELS = {
+  chicken:'Chicken',beef:'Beef',pork:'Pork',seafood:'Seafood',pasta:'Pasta',vegetarian:'Vegetarian',
+  sandwich:'Sandwich',wrap:'Wrap',bowl:'Bowl',
+  eggs:'Eggs',oats:'Oats',pancakes:'Pancakes',smoothie:'Smoothie',pastry:'Pastry',
+  chocolate:'Chocolate',fruit:'Fruit',cake:'Cake',cookie:'Cookie',frozen:'Frozen',
+  sweet:'Sweet',savory:'Savory',
+  vegetable:'Vegetable',grain:'Grain',potato:'Potato',
+  coffee:'Coffee',tea:'Tea',juice:'Juice',
+  other:'Other'
+};
 
 /* ── Completeness scoring ── */
 function recipeCompleteness(r){
@@ -806,6 +834,7 @@ const BUILTIN = [
 let imported      = JSON.parse(localStorage.getItem('ck_imported')||'[]');
 let tracking      = JSON.parse(localStorage.getItem('ck_tracking')||'{}');
 let customUrls    = JSON.parse(localStorage.getItem('ck_urls')||'{}'); // id → ytUrl for built-ins
+let hiddenIds     = JSON.parse(localStorage.getItem('ck_hidden')||'[]'); // built-in recipe ids the user has deleted
 let nextId        = Math.max(100, ...imported.map(r=>r.id||0)) + 1;
 let currentFilter = 'all';
 let searchQuery   = '';
@@ -824,10 +853,14 @@ let pendingMap    = {}; // source → pending recipes array
   BUILTIN.forEach(r=>{if(CAT_MIGRATION[r.category])r.category=CAT_MIGRATION[r.category];});
 })();
 
-function allRecipes(){ return [...BUILTIN, ...imported]; }
+function allRecipes(){
+  const hidden=new Set(hiddenIds);
+  return [...BUILTIN.filter(r=>!hidden.has(r.id)), ...imported];
+}
 function saveImported(){ localStorage.setItem('ck_imported', JSON.stringify(imported)); syncPush(['ck_imported']); }
 function saveTracking(){ localStorage.setItem('ck_tracking', JSON.stringify(tracking)); syncPush(['ck_tracking']); }
 function saveUrls(){ localStorage.setItem('ck_urls', JSON.stringify(customUrls)); syncPush(['ck_urls']); }
+function saveHidden(){ localStorage.setItem('ck_hidden', JSON.stringify(hiddenIds)); syncPush(['ck_hidden']); }
  
 /* ══════════════════════════════════════════
    SYNC ENGINE
@@ -895,7 +928,7 @@ async function syncPull() {
     const { data } = await res.json();
     if (!data || !data.length) { setSyncStatus('online'); return; }
  
-    const VALID_KEYS = new Set(['ck_imported','ck_tracking','ck_urls','ck_api_key','ck_units','ck_theme']);
+    const VALID_KEYS = new Set(['ck_imported','ck_tracking','ck_urls','ck_hidden','ck_api_key','ck_units','ck_theme']);
     let needReload = false;
     let maxTime = lastSyncTime;
     for (const row of data) {
@@ -926,6 +959,7 @@ function reloadFromLocalStorage() {
   imported = JSON.parse(localStorage.getItem('ck_imported') || '[]');
   tracking = JSON.parse(localStorage.getItem('ck_tracking') || '{}');
   customUrls = JSON.parse(localStorage.getItem('ck_urls') || '{}');
+  hiddenIds = JSON.parse(localStorage.getItem('ck_hidden') || '[]');
   unitSystem = localStorage.getItem('ck_units') || 'us';
   nextId = Math.max(100, ...imported.map(r => r.id || 0)) + 1;
   applyTheme(localStorage.getItem('ck_theme') || 'light');
@@ -935,6 +969,11 @@ function reloadFromLocalStorage() {
       const b = BUILTIN.find(x => x.id === id);
       if (b) b.category = customUrls[k];
     }
+    if (k.startsWith('sub_')) {
+      const id = parseInt(k.replace('sub_', ''));
+      const b = BUILTIN.find(x => x.id === id);
+      if (b) b.subcategory = customUrls[k];
+    }
   });
   const k = localStorage.getItem('ck_api_key');
   if (k) { showKeySaved(k); collapseKeyCard(); }
@@ -943,7 +982,7 @@ function reloadFromLocalStorage() {
  
 async function syncPushAll() {
   if (!_syncEnabled || !syncUserId) return;
-  const keys = ['ck_imported', 'ck_tracking', 'ck_urls', 'ck_api_key', 'ck_units', 'ck_theme'];
+  const keys = ['ck_imported', 'ck_tracking', 'ck_urls', 'ck_hidden', 'ck_api_key', 'ck_units', 'ck_theme'];
   const items = keys.map(k => ({ key: k, value: localStorage.getItem(k) })).filter(i => i.value !== null);
   try {
     const res = await fetch(`/api/sync/${syncUserId}`, {
@@ -1121,6 +1160,35 @@ function deleteLogEntry(id,idx){
 }
 function todayStr(){return new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});}
 function lastMadeStr(log){return(log&&log.length)?log[0].date:null;}
+function isEricApproved(id){return !!(tracking[id]&&tracking[id].ericApproved);}
+function toggleEricApproved(id){
+  if(!tracking[id])tracking[id]={rating:null,log:[]};
+  tracking[id].ericApproved=!tracking[id].ericApproved;
+  saveTracking();
+  renderGrid();
+  const btn=document.getElementById(`eric-btn-${id}`);
+  if(btn){
+    const on=isEricApproved(id);
+    btn.classList.toggle('on',on);
+    btn.innerHTML=`<span>🙏</span><span>${on?'Eric approved':'Mark Eric approved'}</span>`;
+  }
+}
+function deleteRecipe(id){
+  const r=allRecipes().find(x=>x.id===id);
+  if(!r)return;
+  if(!confirm(`Delete "${cap(r.title)}"? This will also clear its tracking history.`))return;
+  const imp=imported.find(x=>x.id===id);
+  if(imp){
+    imported=imported.filter(x=>x.id!==id);
+    saveImported();
+  }else{
+    if(!hiddenIds.includes(id))hiddenIds.push(id);
+    saveHidden();
+  }
+  if(tracking[id]){delete tracking[id];saveTracking();}
+  closeModal();
+  renderGrid();
+}
  
 /* ══════════════════════════════════════════
    NAVIGATION
@@ -1143,10 +1211,12 @@ function switchAdminTab(tab,btn){
    GRID + SEARCH
 ══════════════════════════════════════════ */
 function cap(s){return s?s.charAt(0).toUpperCase()+s.slice(1):'';}
-function tagHtml(cat){
+function tagHtml(cat,sub){
   const label=CAT_LABEL[cat]||cap(cat);
   const cls=`tag-${cat}`;
-  return`<span class="tag ${cls}">${label}</span>`;
+  const subLbl=sub?(SUB_LABELS[sub]||cap(sub)):'';
+  const subPart=subLbl?` · ${subLbl}`:'';
+  return`<span class="tag ${cls}">${label}${subPart}</span>`;
 }
 function gradeHtml(id){
   const g=getTrack(id).rating;
@@ -1170,10 +1240,11 @@ function cardHtml(r){
   const comp=recipeCompleteness(r);
   const badgeCls=comp.level==='missing'?'badge-missing':comp.level==='incomplete'?'badge-incomplete':'';
   const badgeHtml=badgeCls?`<span class="completeness-badge ${badgeCls}" title="${comp.detail}">⚠ ${comp.label}</span>`:'';
+  const ericHtml=isEricApproved(r.id)?`<span class="eric-badge" title="Eric approved"><span class="eb-emoji">🙏</span>Eric approved</span>`:'';
   const cardCls=comp.level==='missing'?'card card-missing':comp.level==='incomplete'?'card card-incomplete':'card';
   return`<div class="${cardCls}" onclick="openModal(${r.id})">
     <div class="card-top">
-      <div style="display:flex;align-items:center;flex-wrap:wrap;">${tagHtml(r.category||'other')}${badgeHtml}</div>
+      <div style="display:flex;align-items:center;flex-wrap:wrap;">${tagHtml(r.category||'other',r.subcategory)}${ericHtml}${badgeHtml}</div>
       <div class="card-title">${cap(r.title)}</div>
       <div class="card-meta">
         <span>${r.yield||''}</span>
@@ -1367,7 +1438,7 @@ function openModal(id){
   modalServings=modalBaseServings;
   modalIngredients=r.ingredients||[];
  
-  document.getElementById('m-tag').innerHTML=tagHtml(r.category||'other');
+  document.getElementById('m-tag').innerHTML=tagHtml(r.category||'other',r.subcategory);
   document.getElementById('m-title').textContent=cap(r.title);
   document.getElementById('m-sub').textContent=[r.source,r.yield,r.storage].filter(Boolean).join(' · ');
  
@@ -1395,9 +1466,20 @@ function openModal(id){
   const catOpts=ALL_CATS.map(c=>`<option value="${c}"${c===r.category?' selected':''}>${CAT_LABEL[c]||cap(c)}</option>`).join('');
   const catEdit=`<div class="cat-edit-row">
     <span class="slabel" style="margin-bottom:0;flex-shrink:0;">Category</span>
-    <select class="cat-select" id="cat-sel-${id}">${catOpts}</select>
+    <select class="cat-select" id="cat-sel-${id}" onchange="onCatChange(${id})">${catOpts}</select>
     <button class="cat-save-btn" onclick="saveCategory(${id})">Save</button>
     <span class="cat-saved" id="cat-saved-${id}">✓ Saved</span>
+  </div>`;
+
+  // Sub-category edit (shown only when category has sub-types)
+  const subs=SUB_CATS[r.category]||[];
+  const curSub=r.subcategory||'';
+  const subOpts=`<option value="">—</option>`+subs.map(s=>`<option value="${s}"${s===curSub?' selected':''}>${SUB_LABELS[s]||cap(s)}</option>`).join('');
+  const subEdit=`<div class="cat-edit-row" id="sub-edit-row-${id}" style="display:${subs.length?'flex':'none'};">
+    <span class="slabel" style="margin-bottom:0;flex-shrink:0;">Sub-type</span>
+    <select class="cat-select" id="sub-sel-${id}">${subOpts}</select>
+    <button class="cat-save-btn" onclick="saveSubcategory(${id})">Save</button>
+    <span class="cat-saved" id="sub-saved-${id}">✓ Saved</span>
   </div>`;
  
   // URL edit
@@ -1413,12 +1495,18 @@ function openModal(id){
     ?`<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:10px 14px;margin-bottom:1rem;font-size:13px;color:#92400e;">
         <strong>⚠ ${comp.label}:</strong> ${comp.detail}. This recipe needs editing — open the source file or use the edit fields below to complete it.
       </div>`:'';
+  const ericOn=isEricApproved(id);
+  const actions=`<div class="recipe-actions">
+    <button class="eric-toggle-btn${ericOn?' on':''}" id="eric-btn-${id}" onclick="toggleEricApproved(${id})"><span>🙏</span><span>${ericOn?'Eric approved':'Mark Eric approved'}</span></button>
+    <button class="delete-btn" onclick="deleteRecipe(${id})">Delete recipe</button>
+  </div>`;
   document.getElementById('m-body').innerHTML=`
     ${compBanner}${topHtml}
     <div class="modal-2col">${ingSection}${stepsHtml}</div>
     ${tipsHtml}
-    ${catEdit}${urlEdit}
-    ${buildTrackPanel(id)}`;
+    ${catEdit}${subEdit}${urlEdit}
+    ${buildTrackPanel(id)}
+    ${actions}`;
   document.getElementById('overlay').classList.add('open');
   document.getElementById('overlay').scrollTop=0;
 }
@@ -1439,11 +1527,58 @@ function saveCategory(id){
     // Patch BUILTIN in memory
     const b=BUILTIN.find(x=>x.id===id);if(b)b.category=newCat;
   }
+  // If current subcategory isn't valid for the new category, clear it
+  const subs=SUB_CATS[newCat]||[];
+  const curSub=(imp?imp.subcategory:(BUILTIN.find(x=>x.id===id)||{}).subcategory)||'';
+  if(curSub && !subs.includes(curSub)){
+    if(imp){imp.subcategory='';saveImported();}
+    else{delete customUrls[`sub_${id}`];saveUrls();const b=BUILTIN.find(x=>x.id===id);if(b)b.subcategory='';}
+  }
+  refreshSubEditor(id,newCat);
   const saved=document.getElementById(`cat-saved-${id}`);
   saved.classList.add('show');setTimeout(()=>saved.classList.remove('show'),1800);
   renderGrid();
   // Update tag in header
-  document.getElementById('m-tag').innerHTML=tagHtml(newCat);
+  const rUpd=allRecipes().find(x=>x.id===id);
+  document.getElementById('m-tag').innerHTML=tagHtml(newCat,rUpd?rUpd.subcategory:'');
+}
+
+function onCatChange(id){
+  const sel=document.getElementById(`cat-sel-${id}`);
+  if(!sel)return;
+  refreshSubEditor(id,sel.value,{preserveChoice:true});
+}
+
+function refreshSubEditor(id,cat,opts={}){
+  const row=document.getElementById(`sub-edit-row-${id}`);
+  if(!row)return;
+  const subs=SUB_CATS[cat]||[];
+  if(!subs.length){row.style.display='none';return;}
+  const sub=document.getElementById(`sub-sel-${id}`);
+  const prev=opts.preserveChoice&&sub?sub.value:((allRecipes().find(x=>x.id===id)||{}).subcategory||'');
+  const keep=subs.includes(prev)?prev:'';
+  const opts2=`<option value="">—</option>`+subs.map(s=>`<option value="${s}"${s===keep?' selected':''}>${SUB_LABELS[s]||cap(s)}</option>`).join('');
+  if(sub)sub.innerHTML=opts2;
+  row.style.display='flex';
+}
+
+function saveSubcategory(id){
+  const sel=document.getElementById(`sub-sel-${id}`);
+  if(!sel)return;
+  const newSub=sel.value;
+  const imp=imported.find(x=>x.id===id);
+  if(imp){imp.subcategory=newSub;saveImported();}
+  else{
+    if(newSub)customUrls[`sub_${id}`]=newSub;
+    else delete customUrls[`sub_${id}`];
+    saveUrls();
+    const b=BUILTIN.find(x=>x.id===id);if(b)b.subcategory=newSub;
+  }
+  const saved=document.getElementById(`sub-saved-${id}`);
+  saved.classList.add('show');setTimeout(()=>saved.classList.remove('show'),1800);
+  renderGrid();
+  const r=allRecipes().find(x=>x.id===id);
+  if(r)document.getElementById('m-tag').innerHTML=tagHtml(r.category||'other',r.subcategory);
 }
  
 function saveUrl(id){
@@ -2014,12 +2149,17 @@ function applyTheme(t){
   // Recalculate nextId after migration
   nextId=Math.max(100,...imported.map(r=>r.id||0))+1;
  
-  // Apply saved category overrides for builtins
+  // Apply saved category/subcategory overrides for builtins
   Object.keys(customUrls).forEach(k=>{
     if(k.startsWith('cat_')){
       const id=parseInt(k.replace('cat_',''));
       const b=BUILTIN.find(x=>x.id===id);
       if(b)b.category=customUrls[k];
+    }
+    if(k.startsWith('sub_')){
+      const id=parseInt(k.replace('sub_',''));
+      const b=BUILTIN.find(x=>x.id===id);
+      if(b)b.subcategory=customUrls[k];
     }
   });
  
