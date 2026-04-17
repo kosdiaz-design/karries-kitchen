@@ -287,8 +287,12 @@ body { font-family: 'DM Sans', sans-serif; background: var(--cream); color: var(
 .eric-toggle-btn { font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-mid); background: var(--warm-white); color: var(--text-mid); cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 5px; }
 .eric-toggle-btn:hover { border-color: var(--amber-text); color: var(--amber-text); }
 .eric-toggle-btn.on { background: var(--amber-light); border-color: var(--amber-text); color: var(--amber-text); }
+.edit-recipe-btn { font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-mid); background: var(--warm-white); color: var(--text-dark); cursor: pointer; transition: all 0.15s; }
+.edit-recipe-btn:hover { border-color: var(--text-dark); background: var(--cream); }
 .delete-btn { font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--red-text); background: var(--warm-white); color: var(--red-text); cursor: pointer; transition: all 0.15s; margin-left: auto; }
 .delete-btn:hover { background: var(--red-text); color: var(--warm-white); }
+.edit-cancel-btn { font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500; padding: 8px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-mid); background: var(--warm-white); color: var(--text-dark); cursor: pointer; transition: all 0.15s; }
+.edit-cancel-btn:hover { background: var(--cream); }
 .mark-made-btn { font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500; padding: 7px 14px; border-radius: var(--radius-sm); border: 1px solid var(--green-text); background: var(--green-light); color: var(--green-text); cursor: pointer; transition: all 0.18s; white-space: nowrap; }
 .mark-made-btn:hover { background: var(--green-text); color: var(--warm-white); }
 .mark-made-btn.flash { background: var(--green-text); color: var(--warm-white); transform: scale(0.97); }
@@ -835,6 +839,7 @@ let imported      = JSON.parse(localStorage.getItem('ck_imported')||'[]');
 let tracking      = JSON.parse(localStorage.getItem('ck_tracking')||'{}');
 let customUrls    = JSON.parse(localStorage.getItem('ck_urls')||'{}'); // id → ytUrl for built-ins
 let hiddenIds     = JSON.parse(localStorage.getItem('ck_hidden')||'[]'); // built-in recipe ids the user has deleted
+let recipeEdits   = JSON.parse(localStorage.getItem('ck_edits')||'{}'); // built-in id → partial recipe override
 let nextId        = Math.max(100, ...imported.map(r=>r.id||0)) + 1;
 let currentFilter = 'all';
 let searchQuery   = '';
@@ -855,12 +860,14 @@ let pendingMap    = {}; // source → pending recipes array
 
 function allRecipes(){
   const hidden=new Set(hiddenIds);
-  return [...BUILTIN.filter(r=>!hidden.has(r.id)), ...imported];
+  const builtins=BUILTIN.filter(r=>!hidden.has(r.id)).map(r=>recipeEdits[r.id]?{...r,...recipeEdits[r.id]}:r);
+  return [...builtins, ...imported];
 }
 function saveImported(){ localStorage.setItem('ck_imported', JSON.stringify(imported)); syncPush(['ck_imported']); }
 function saveTracking(){ localStorage.setItem('ck_tracking', JSON.stringify(tracking)); syncPush(['ck_tracking']); }
 function saveUrls(){ localStorage.setItem('ck_urls', JSON.stringify(customUrls)); syncPush(['ck_urls']); }
 function saveHidden(){ localStorage.setItem('ck_hidden', JSON.stringify(hiddenIds)); syncPush(['ck_hidden']); }
+function saveRecipeEdits(){ localStorage.setItem('ck_edits', JSON.stringify(recipeEdits)); syncPush(['ck_edits']); }
  
 /* ══════════════════════════════════════════
    SYNC ENGINE
@@ -928,7 +935,7 @@ async function syncPull() {
     const { data } = await res.json();
     if (!data || !data.length) { setSyncStatus('online'); return; }
  
-    const VALID_KEYS = new Set(['ck_imported','ck_tracking','ck_urls','ck_hidden','ck_api_key','ck_units','ck_theme']);
+    const VALID_KEYS = new Set(['ck_imported','ck_tracking','ck_urls','ck_hidden','ck_edits','ck_api_key','ck_units','ck_theme']);
     let needReload = false;
     let maxTime = lastSyncTime;
     for (const row of data) {
@@ -960,6 +967,7 @@ function reloadFromLocalStorage() {
   tracking = JSON.parse(localStorage.getItem('ck_tracking') || '{}');
   customUrls = JSON.parse(localStorage.getItem('ck_urls') || '{}');
   hiddenIds = JSON.parse(localStorage.getItem('ck_hidden') || '[]');
+  recipeEdits = JSON.parse(localStorage.getItem('ck_edits') || '{}');
   unitSystem = localStorage.getItem('ck_units') || 'us';
   nextId = Math.max(100, ...imported.map(r => r.id || 0)) + 1;
   applyTheme(localStorage.getItem('ck_theme') || 'light');
@@ -982,7 +990,7 @@ function reloadFromLocalStorage() {
  
 async function syncPushAll() {
   if (!_syncEnabled || !syncUserId) return;
-  const keys = ['ck_imported', 'ck_tracking', 'ck_urls', 'ck_hidden', 'ck_api_key', 'ck_units', 'ck_theme'];
+  const keys = ['ck_imported', 'ck_tracking', 'ck_urls', 'ck_hidden', 'ck_edits', 'ck_api_key', 'ck_units', 'ck_theme'];
   const items = keys.map(k => ({ key: k, value: localStorage.getItem(k) })).filter(i => i.value !== null);
   try {
     const res = await fetch(`/api/sync/${syncUserId}`, {
@@ -1232,6 +1240,9 @@ function matchesSearch(r,q){
   return false;
 }
 /* ── Card HTML helper ── */
+function ingCount(r){
+  return (r.ingredients||[]).filter(i=>i&&((i.n||'').trim()||(i.a||'').trim())).length;
+}
 function cardHtml(r){
   const t=getTrack(r.id);
   const n=t.log?t.log.length:0;
@@ -1253,7 +1264,7 @@ function cardHtml(r){
       </div>
     </div>
     <div class="card-bottom">
-      <div class="card-cal"><strong>${r.calories||'—'}</strong> cal · ${(r.ingredients||[]).length} ing.${trackInfo}</div>
+      <div class="card-cal"><strong>${r.calories||'—'}</strong> cal · ${ingCount(r)} ing.${trackInfo}</div>
       <div class="card-track">${gradeHtml(r.id)}<div class="card-arrow">→</div></div>
     </div>
   </div>`;
@@ -1498,6 +1509,7 @@ function openModal(id){
   const ericOn=isEricApproved(id);
   const actions=`<div class="recipe-actions">
     <button class="eric-toggle-btn${ericOn?' on':''}" id="eric-btn-${id}" onclick="toggleEricApproved(${id})"><span>🙏</span><span>${ericOn?'Eric approved':'Mark Eric approved'}</span></button>
+    <button class="edit-recipe-btn" onclick="openEditMode(${id})">✎ Edit recipe</button>
     <button class="delete-btn" onclick="deleteRecipe(${id})">Delete recipe</button>
   </div>`;
   document.getElementById('m-body').innerHTML=`
@@ -1560,6 +1572,102 @@ function refreshSubEditor(id,cat,opts={}){
   const opts2=`<option value="">—</option>`+subs.map(s=>`<option value="${s}"${s===keep?' selected':''}>${SUB_LABELS[s]||cap(s)}</option>`).join('');
   if(sub)sub.innerHTML=opts2;
   row.style.display='flex';
+}
+
+function escHtml(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+function openEditMode(id){
+  const r=allRecipes().find(x=>x.id===id);
+  if(!r)return;
+  const catOpts=ALL_CATS.map(c=>`<option value="${c}"${c===r.category?' selected':''}>${CAT_LABEL[c]||cap(c)}</option>`).join('');
+  const ingText=(r.ingredients||[]).map(i=>`${(i.a||'').trim()} ${(i.n||'').trim()}`.trim()).join('\n');
+  const stepsText=(r.steps||[]).join('\n');
+  const tipsText=(r.tips||[]).join('\n');
+  const form=`<div class="edit-form">
+    <p class="slabel" style="margin-bottom:0.75rem;">Edit recipe</p>
+    <div class="manual-grid">
+      <div class="field-row"><label class="field-label">Title</label><input class="text-input" id="ed-title" value="${escHtml(r.title)}" /></div>
+      <div class="field-row"><label class="field-label">Category</label><select class="text-input" id="ed-cat">${catOpts}</select></div>
+      <div class="field-row"><label class="field-label">Source / Author</label><input class="text-input" id="ed-source" value="${escHtml(r.source||'')}" /></div>
+      <div class="field-row"><label class="field-label">Yield</label><input class="text-input" id="ed-yield" value="${escHtml(r.yield||'')}" /></div>
+      <div class="field-row"><label class="field-label">Base servings</label><input class="text-input" type="number" min="1" id="ed-base" value="${r.baseServings||1}" /></div>
+      <div class="field-row"><label class="field-label">Calories (per serving)</label><input class="text-input" type="number" id="ed-cal" value="${r.calories==null?'':r.calories}" /></div>
+      <div class="field-row"><label class="field-label">Prep time</label><input class="text-input" id="ed-prep" value="${escHtml(r.prep||'')}" /></div>
+      <div class="field-row"><label class="field-label">Cook time</label><input class="text-input" id="ed-cook" value="${escHtml(r.cook||'')}" /></div>
+      <div class="field-row"><label class="field-label">Storage</label><input class="text-input" id="ed-storage" value="${escHtml(r.storage||'')}" /></div>
+      <div class="field-row"><label class="field-label">Source URL</label><input class="text-input" id="ed-url" value="${escHtml(r.ytUrl||'')}" /></div>
+    </div>
+    <div class="field-row" style="margin-top:1rem;">
+      <label class="field-label">Ingredients — one per line (amount then name)</label>
+      <textarea class="text-input" style="min-height:160px;font-family:monospace;font-size:13px;" id="ed-ings">${escHtml(ingText)}</textarea>
+    </div>
+    <div class="field-row">
+      <label class="field-label">Steps — one per line</label>
+      <textarea class="text-input" style="min-height:160px;font-size:13px;" id="ed-steps">${escHtml(stepsText)}</textarea>
+    </div>
+    <div class="field-row">
+      <label class="field-label">Tips — one per line (optional)</label>
+      <textarea class="text-input" style="min-height:80px;font-size:13px;" id="ed-tips">${escHtml(tipsText)}</textarea>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:1.25rem;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-primary" onclick="saveEdit(${id})">Save changes</button>
+      <button class="edit-cancel-btn" onclick="openModal(${id})">Cancel</button>
+      <span style="font-size:11px;color:var(--text-light);margin-left:auto;">Changes persist to your browser.</span>
+    </div>
+  </div>`;
+  document.getElementById('m-body').innerHTML=form;
+  document.getElementById('overlay').scrollTop=0;
+}
+
+function parseIngLine(line){
+  const m=line.match(/^([\d½¼¾⅓⅔⅛⅜⅝⅞\s./-]+\s*(?:tsp|tbsp|cup|cups|oz|lb|lbs|g|kg|ml|l|pinch|dash|scoop|to taste)?)\s+(.+)$/i);
+  if(m)return{a:m[1].trim(),n:m[2].trim()};
+  return{a:'',n:line.trim()};
+}
+
+function saveEdit(id){
+  const v=i=>{const el=document.getElementById('ed-'+i);return el?el.value:'';};
+  const title=v('title').trim();
+  if(!title){alert('Title cannot be empty.');return;}
+  const ingText=v('ings').trim();
+  const stepsText=v('steps').trim();
+  const tipsText=v('tips').trim();
+  const ingredients=ingText?ingText.split('\n').map(l=>l.trim()).filter(Boolean).map(parseIngLine):[];
+  const steps=stepsText?stepsText.split('\n').map(l=>l.trim()).filter(Boolean):[];
+  const tips=tipsText?tipsText.split('\n').map(l=>l.trim()).filter(Boolean):[];
+  const calRaw=v('cal').trim();
+  const baseRaw=v('base').trim();
+  const cookVal=v('cook').trim();
+  const patch={
+    title:title.toLowerCase(),
+    category:v('cat'),
+    source:v('source').trim(),
+    yield:v('yield').trim(),
+    baseServings:baseRaw?(parseInt(baseRaw)||1):1,
+    prep:v('prep').trim(),
+    cook:cookVal||'None',
+    storage:v('storage').trim(),
+    ytUrl:v('url').trim(),
+    calories:calRaw?(parseInt(calRaw)||null):null,
+    ingredients,steps,tips
+  };
+  const imp=imported.find(x=>x.id===id);
+  if(imp){
+    Object.assign(imp,patch);
+    saveImported();
+  }else{
+    // Built-in: store full patch in recipeEdits
+    recipeEdits[id]=Object.assign(recipeEdits[id]||{},patch);
+    saveRecipeEdits();
+    // Mirror category/url edits into customUrls for consistency with inline editors
+    customUrls[`cat_${id}`]=patch.category;
+    if(patch.ytUrl)customUrls[id]=patch.ytUrl; else delete customUrls[id];
+    saveUrls();
+    const b=BUILTIN.find(x=>x.id===id);
+    if(b){b.category=patch.category;}
+  }
+  renderGrid();
+  openModal(id);
 }
 
 function saveSubcategory(id){
