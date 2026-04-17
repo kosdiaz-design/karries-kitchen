@@ -3,6 +3,9 @@
   "private": true,
   "version": "2.0.0",
   "description": "v2 rebuild workspace. Legacy v1 lives at repo root in KarriesKitchen.html.",
+  "engines": {
+    "node": ">=20"
+  },
   "workspaces": [
     "client",
     "server"
