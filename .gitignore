@@ -1,12 +1,6 @@
 node_modules/
 .env
-.env.local
 .DS_Store
 npm-debug.log
 .vscode/
 .idea/
-
-# v2 build artifacts
-v2/client/dist/
-v2/server/dist/
-v2/**/*.tsbuildinfo

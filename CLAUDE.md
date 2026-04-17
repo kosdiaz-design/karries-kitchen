@@ -1,21 +1,12 @@
 # Karrie's Kitchen — Claude Code Context
 
-## Repo layout at a glance
+## Project overview
 
-| Path | What it is |
-|------|-----------|
-| `KarriesKitchen.html` + `server.js` + `package.json` | **v1 (legacy).** Single-file HTML app, served by a thin Express wrapper. Currently deployed. Still gets bug fixes until v2 cutover. |
-| `v2/` | **v2 rebuild.** Vite + React + TypeScript client, Express + TypeScript server, Postgres, JWT auth. Under active development. See `v2/` section below. |
-
-When a task says "the app", ask which surface. Default to v2 for anything new after April 2026; only touch the legacy single-file app if a fix is needed before cutover.
-
----
-
-## v1 (legacy) overview
-
-Karrie's Kitchen v1 is a **single-file HTML recipe app** (`KarriesKitchen.html`). No build tools, no framework — open it in any browser and it runs. Data persists in `localStorage`. The Anthropic API is called directly from the browser using the user's own API key.
+Karrie's Kitchen is a **single-file HTML recipe app** (`KarriesKitchen.html`). No build tools, no framework, no server — open it in any browser and it runs. All data persists in `localStorage`. The Anthropic API is called directly from the browser using the user's own API key.
 
 The file is ~1,265 lines structured as: `<style>` → `<body HTML>` → `<script>`. All CSS, HTML, and JS live in one file. Do not split into separate files unless explicitly asked.
+
+> **v2 rebuild lives in a separate repo.** The full Vite + React + TypeScript rebuild per the April 2026 plan is at `kosdiaz-design/Karries-Kitchen-2`. This repo (v1) keeps shipping bug fixes until v2 reaches parity, then gets retired. Do not add v2 code here.
 
 ---
 
@@ -321,123 +312,3 @@ app.listen(process.env.PORT || 3000);
 4. Connect repo to Railway → auto-deploys on every push
 
 **Note:** Because this app uses `localStorage`, data does not persist across devices or browsers in the Railway deployment. For shared data, a Postgres backend would be needed (see Planned features).
-
----
-
-## v2 rebuild (`v2/`)
-
-Full rebuild per the April 2026 plan: minimalist, search-first, AI-assisted ingestion (HelloFresh photos, PDFs, YouTube), Karrie's approval queue for Eric's Instagram/Facebook imports, cooking + presentation modes, per-recipe ESV blessing, Publix Gandy aisle-ordered grocery list. Sprint 0 (this commit) is the foundation only — not a working product.
-
-### v2 tech stack
-
-- **Client:** Vite + React 19 + TypeScript (`v2/client/`)
-- **Server:** Node + Express 4 + TypeScript, ESM (`v2/server/`)
-- **Database:** PostgreSQL via `pg` pool
-- **Auth:** JWT (`jsonwebtoken`), bcrypt-hashed PINs seeded from env (`PIN_KARRIE`, `PIN_ERIC`)
-- **AI (future sprints):** Anthropic Claude Sonnet server-side for extraction/blessings/edits; vision for HelloFresh cards + YouTube keyframes
-- **Hosting:** Railway (single service — server builds client, serves `dist/` + API)
-
-### v2 directory layout
-
-```
-v2/
-├── package.json              # npm workspaces root (client + server)
-├── railway.json              # Railway build/start + /api/health check
-├── .env.example              # DATABASE_URL, JWT_SECRET, PIN_KARRIE, PIN_ERIC
-├── client/                   # Vite app
-│   ├── index.html
-│   ├── vite.config.ts        # dev proxy: /api → :3001
-│   └── src/
-│       ├── main.tsx, App.tsx, styles.css
-│       ├── lib/api.ts        # fetch wrapper + bearer token
-│       ├── lib/auth.tsx      # <AuthProvider>, useAuth()
-│       └── pages/            # Login.tsx, Home.tsx
-├── server/                   # Express app
-│   └── src/
-│       ├── index.ts          # entry; serves client/dist in prod
-│       ├── env.ts            # typed env loader
-│       ├── db.ts             # pg Pool + query helper
-│       ├── auth.ts           # sign/verify JWT
-│       ├── middleware.ts     # requireAuth, requireAdmin
-│       ├── seed.ts           # upserts karrie + eric from env PINs
-│       ├── migrate.ts        # applies v2/db/migrations/*.sql
-│       └── routes/           # auth.ts, health.ts
-└── db/migrations/            # numbered SQL files, applied in order
-    ├── 001_users.sql
-    ├── 002_recipes.sql
-    ├── 003_recipe_edit_history.sql
-    ├── 004_pending_imports.sql
-    ├── 005_grocery_lists.sql
-    ├── 006_meal_plans.sql
-    └── 007_publix_aisles.sql
-```
-
-### v2 local dev
-
-```bash
-cd v2
-npm install                 # installs both workspaces
-cp .env.example server/.env # fill DATABASE_URL, JWT_SECRET, PIN_KARRIE, PIN_ERIC
-npm run migrate             # apply migrations to DATABASE_URL
-npm run dev:server          # :3001
-npm run dev:client          # :5173 (proxies /api → :3001)
-```
-
-### v2 roles
-
-| User | `user_id` | Role | Surface |
-|------|-----------|------|---------|
-| Karrie | `karrie` | `user` | Default — everything except `/admin/*` |
-| Eric | `eric` | `admin` | Everything + `/admin/*` (imports, ISF pipeline, edit log, AI usage) |
-
-Both PINs are seeded from `PIN_KARRIE` / `PIN_ERIC` env vars on every boot via `seed.ts`. Changing the env var rehashes and updates the row.
-
-### v2 auth flow
-
-1. `POST /api/auth/login { user_id, pin }` → `{ token, user }` (rate-limited, 10/15min/IP)
-2. Client stores token in `localStorage` under `kk_v2_token`
-3. Every request sends `Authorization: Bearer <token>`
-4. `GET /api/auth/me` rehydrates on reload
-5. `requireAuth` middleware attaches `req.user = { sub, name, role }`; `requireAdmin` gates admin routes
-
-JWT secret: `JWT_SECRET` env var. Expiry: `JWT_EXPIRES_IN` (default 7d).
-
-### v2 data model (see migrations for source of truth)
-
-- `users` — `user_id`, `name`, `role ∈ {admin, user}`, `pin_hash`
-- `recipes` — all fields from the build plan (title, source_type, ingredients/steps jsonb, equipment[], macros, main_protein, tags[], esv_blessing_text, rating, is_favorite, is_eric_approved, times_made, last_cooked_at, approved, approved_by…)
-- `recipe_edit_history` — per-edit jsonb snapshot + note, append-only
-- `pending_imports` — Eric's queue of Instagram/Facebook/etc. recipes awaiting Karrie's approval
-- `grocery_lists` — array of `recipe_ids`, `items` jsonb, `publix_aisle_ordered` flag
-- `meal_plans` — one row per `(user_id, week_starting)`, `days` jsonb, `ai_generated` flag
-- `publix_aisles` — reference table mapping keywords → aisle order for the Gandy Commons store
-
-### v2 migrations
-
-- Numbered SQL files in `v2/db/migrations/`, applied in lexicographic order by `v2/server/src/migrate.ts`
-- Applied migrations tracked in `schema_migrations` table
-- Each file runs inside a transaction; failure rolls back and halts
-- **Never edit a migration after it's been applied to prod.** Add a new numbered file instead.
-
-### v2 Railway deploy
-
-- Root directory in Railway service: `v2/`
-- Build: `npm ci && npm run build` (builds both client and server)
-- Start: `npm run migrate && npm run start` (runs migrations, then serves client/dist + API from `:$PORT`)
-- Health check: `GET /api/health` (verifies DB reachable)
-- Required env vars: `DATABASE_URL`, `JWT_SECRET`, `PIN_KARRIE`, `PIN_ERIC`
-- `NODE_ENV=production` makes the server serve `client/dist/` and SPA-fallback to `index.html`
-
-### v2 sprint status
-
-- **Sprint 0 (done):** Scaffolding — workspace, Vite client with Login/Home placeholders, Express server, JWT auth, migrations, Railway config, seed script.
-- **Sprint 1 (next):** Search-first home, recipe card view, manual entry, browse by protein, font-size slider, import Karrie's ~150 existing recipes.
-- **Sprints 2–5:** See the April 2026 build plan.
-
-### v2 conventions
-
-- **TypeScript strict mode everywhere.** `npm run typecheck` from `v2/` checks both workspaces.
-- **No `any` unless isolated at an I/O boundary with a TODO.**
-- **AI calls are server-side only in v2** (unlike v1 which called Claude from the browser). `ANTHROPIC_API_KEY` lives in Railway env, never ships to the client.
-- **Never touch v1 files (`KarriesKitchen.html`, root `server.js`, root `package.json`) while working in v2**, and vice versa. They ship independently until cutover.
-- **Cutover plan:** When v2 reaches parity, replace root `server.js` + `package.json` with pointers into `v2/server/`. Keep `KarriesKitchen.html` for one release as a `/legacy` fallback, then remove.
